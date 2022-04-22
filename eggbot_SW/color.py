@@ -46,6 +46,7 @@ def convertImage(im, penColors, mults=None):
 
     if not mults:
         mults = [1]*len(penColors)
+        
     
     newIm = im
     errIm = np.zeros((im.shape[0], im.shape[1], len(penColors)))
@@ -54,10 +55,22 @@ def convertImage(im, penColors, mults=None):
     
     minIndexes = np.argmin(errIm, 2)
     
+    
     for cind in range(len(penColors)):
         for i in range(3):
+            
             newIm[:, :, i][minIndexes==cind] = penColors[cind][i]
     
-    return newIm
+    return (newIm, minIndexes)
 
 
+def generatePaletteImage(penColors):
+    # Color reference image
+    ciw = 100
+    cih = 20
+    pcl = len(penColors)
+    colorImage = np.ones((cih, ciw, 3))
+    w = ciw//pcl
+    for i in range(pcl):
+        colorImage[:, i*w:(i+1)*w] = np.array(penColors[i])/255
+    return colorImage
