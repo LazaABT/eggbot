@@ -3,21 +3,31 @@ For functions concerning color manipulation
 
 '''
 
+import numpy as np
+import pickle
+
 # Pen colors
-# white, yellow, green, blue, red
-penColors = [(255,255,255), (0, 0, 0), (235, 64, 52), (0, 255, 208), 
-             (51, 255, 0), (0, 76, 255), (255, 0, 0), (178, 214, 200)]
+#penColors = [[255, 255, 255], [213, 192, 101], [79, 150, 180], 
+# [151, 160, 159], [172, 129, 78], [69, 137, 96], [171, 62, 68],
+# [131, 76, 81], [47, 70, 150], [71, 71, 73]]
+
+
+
+def loadColors(file):
+    #Loads pen colors from pickle file
+    with open(file, "rb") as f:
+        penColors = pickle.load(f)
+    return penColors
 
 
 def sqDist(a, b):
     # 3d euclidean distance squared
     return (a[0]-b[0])**2+(a[1]-b[1])**2+(a[2]-b[2])**2
 
-def closestColor(color):
+def closestColor(color, penColors):
     ''' Returns pen color best matching given color
     color - array of 3 elements (r, g, b)
     '''
-    
     bestColor = penColors[0]
     minDist = 100000
     for i in range(len(penColors)):
@@ -25,18 +35,29 @@ def closestColor(color):
         if(dist < minDist):
             minDist = dist
             bestColor = penColors[i]
-    if(minDist == 100000): return -1
     
     return bestColor
 
-def convertImage(im):
+
+def convertImage(im, penColors, mults=None):
     ''' Retruns image with colors replaced with their closest counterpart
         in the penColors array
     '''
-    newIm = im[:]
-    for i in range(im.shape[0]):
-        for j in range(im.shape[1]):
-            newIm[i][j] = closestColor(im[i][j])
-        
+
+    if not mults:
+        mults = [1]*len(penColors)
+    
+    newIm = im
+    errIm = np.zeros((im.shape[0], im.shape[1], len(penColors)))
+    for i in range(len(penColors)):
+        errIm[:,:,i] = np.sum((im-penColors[i])**2, 2)*mults[i]
+    
+    minIndexes = np.argmin(errIm, 2)
+    
+    for cind in range(len(penColors)):
+        for i in range(3):
+            newIm[:, :, i][minIndexes==cind] = penColors[cind][i]
+    
     return newIm
+
 
