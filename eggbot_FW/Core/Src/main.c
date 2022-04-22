@@ -65,9 +65,15 @@ static void MX_TIM4_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+#define LIMIT_PIN (1)
+#define RX_BUFF_SIZE (64)
+#define TX_BUFF_SIZE (16)
 
 int count = 1;
 int count3 = 0;
+
+char rx_buffer[RX_BUFF_SIZE];
+char tx_buffer[TX_BUFF_SIZE];
 
 /* USER CODE END 0 */
 
@@ -117,27 +123,50 @@ int main(void)
   double pos = -0.5;
   int posidx = 0;
   HAL_TIM_PWM_Start_IT(&htim4, TIM_CHANNEL_1);
+  HAL_UART_Receive_DMA(&huart1, rx_buffer, RX_BUFF_SIZE);
 
-
+  char tmp = 0;
+  int current_active = RX_BUFF_SIZE-1, new_active = RX_BUFF_SIZE-1;
   while (1)
   {
+	  new_active = (2*RX_BUFF_SIZE - hdma_usart1_rx.Instance->CNDTR-1)%RX_BUFF_SIZE;
+	  if (hdma_usart1_tx.State == HAL_DMA_STATE_READY)
+	  {
+		  if (new_active != current_active)
+		  {
 
-
-	  HAL_Delay(1);
-//	  if (HAL_GPIO_ReadPin(BTN_GPIO_Port, BTN_Pin))
-//	  {
-		  count = 0;
-		  count3 = 0;
-		  htim4.Instance->CCR1 = (int)(pos * 3000.0 + 3000.0)-1;
-		  pos = pos + 0.02;
-		  if (pos > 1.5)
-			  pos = -0.6;
-//		  HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_1);
-//		  HAL_TIM_PWM_Start_IT(&htim3, TIM_CHANNEL_1);
-		  HAL_Delay(100);
-//		  while (HAL_GPIO_ReadPin(BTN_GPIO_Port, BTN_Pin))
-//		  {}
-//		  HAL_Delay(10);
+			  int i = 0;
+			  while (current_active != new_active)
+			  {
+				  current_active = (current_active + 1)%RX_BUFF_SIZE;
+				  //TODO Check size!!! So no oerflow
+				  tx_buffer[i++]=rx_buffer[current_active];
+			  }
+			  volatile long cnt = 0;
+			  while (hdma_usart1_tx.State != HAL_DMA_STATE_READY)
+			  {
+				  cnt++;
+			  }
+			  cnt++;
+			  HAL_UART_AbortTransmit(&huart1);
+			  HAL_UART_Transmit_DMA(&huart1, tx_buffer, i);
+		  }
+	  }
+//	  HAL_Delay(1);
+////	  if (HAL_GPIO_ReadPin(BTN_GPIO_Port, BTN_Pin))
+////	  {
+//		  count = 0;
+//		  count3 = 0;
+//		  htim4.Instance->CCR1 = (int)(pos * 3000.0 + 3000.0)-1;
+//		  pos = pos + 0.02;
+//		  if (pos > 1.5)
+//			  pos = -0.6;
+////		  HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_1);
+////		  HAL_TIM_PWM_Start_IT(&htim3, TIM_CHANNEL_1);
+//		  HAL_Delay(100);
+////		  while (HAL_GPIO_ReadPin(BTN_GPIO_Port, BTN_Pin))
+////		  {}
+////		  HAL_Delay(10);
 
 //	  }
 //	  HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
@@ -440,7 +469,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : BTN_Pin */
   GPIO_InitStruct.Pin = BTN_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(BTN_GPIO_Port, &GPIO_InitStruct);
 
@@ -457,6 +486,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI0_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI0_IRQn);
 
 }
 
@@ -483,6 +516,15 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 	  }
 	}
 
+}
+
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
+{
+	if (GPIO_Pin == LIMIT_PIN)
+	{
+		HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+	}
 }
 
 /* USER CODE END 4 */
