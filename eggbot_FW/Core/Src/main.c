@@ -31,6 +31,14 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define LIMIT_PIN (1)
+#define RX_BUFF_SIZE (64)
+#define TX_BUFF_SIZE (16)
+#define CMD_BUFFER_SIZE (16)
+#define STEPPER_X_MAX (200*16)
+#define STEPPER_Y_MAX (100*16)
+#define SERVO_UP_POSITION (3000)
+#define SERVO_DOWN_POSITION (6000)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -60,20 +68,25 @@ static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
-
+void move_servos(int16_t xrel, int16_t yrel);
+void send_message(uint8_t* msg, int len);
+void process_command();
+void command_buffer_overflow();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-#define LIMIT_PIN (1)
-#define RX_BUFF_SIZE (64)
-#define TX_BUFF_SIZE (16)
 
-int count = 1;
-int count3 = 0;
 
-char rx_buffer[RX_BUFF_SIZE];
-char tx_buffer[TX_BUFF_SIZE];
+uint8_t command_buffer[CMD_BUFFER_SIZE], command_buffer_pos = 0;
+uint8_t rx_buffer[RX_BUFF_SIZE];
+uint8_t tx_buffer[TX_BUFF_SIZE];
+
+int16_t stepper_x_count = 0, stepper_x_goal = 0, stepper_x_direction = 1, stepper_x_speed = 0;
+int16_t stepper_y_count = 0, stepper_y_goal = 0, stepper_y_direction = 1, stepper_y_speed = 0;
+uint8_t zeroed = 0, limit_flag = 0;
+
+volatile int tmp = 0;
 
 /* USER CODE END 0 */
 
@@ -120,38 +133,57 @@ int main(void)
 //  volatile HAL_StatusTypeDef tmp = HAL_TIM_Base_Start(&htim2);
 
 
-  double pos = -0.5;
-  int posidx = 0;
+  htim4.Instance->CCR1 = (int)(SERVO_UP_POSITION)-1;
   HAL_TIM_PWM_Start_IT(&htim4, TIM_CHANNEL_1);
   HAL_UART_Receive_DMA(&huart1, rx_buffer, RX_BUFF_SIZE);
 
-  char tmp = 0;
   int current_active = RX_BUFF_SIZE-1, new_active = RX_BUFF_SIZE-1;
   while (1)
   {
 	  new_active = (2*RX_BUFF_SIZE - hdma_usart1_rx.Instance->CNDTR-1)%RX_BUFF_SIZE;
-	  if (hdma_usart1_tx.State == HAL_DMA_STATE_READY)
+	  while (current_active != new_active)
 	  {
-		  if (new_active != current_active)
+		  current_active = (current_active + 1)%RX_BUFF_SIZE;
+		  if (rx_buffer[current_active] == '\r' || rx_buffer[current_active] == '\n')
 		  {
-
-			  int i = 0;
-			  while (current_active != new_active)
+			  if (command_buffer_pos > 0)
 			  {
-				  current_active = (current_active + 1)%RX_BUFF_SIZE;
-				  //TODO Check size!!! So no oerflow
-				  tx_buffer[i++]=rx_buffer[current_active];
+				  process_command();
 			  }
-			  volatile long cnt = 0;
-			  while (hdma_usart1_tx.State != HAL_DMA_STATE_READY)
-			  {
-				  cnt++;
-			  }
-			  cnt++;
-			  HAL_UART_AbortTransmit(&huart1);
-			  HAL_UART_Transmit_DMA(&huart1, tx_buffer, i);
+			  command_buffer_pos = 0;
+			  continue;
 		  }
+		  command_buffer[command_buffer_pos]=rx_buffer[current_active];
+		  command_buffer_pos += 1;
+		  if (command_buffer_pos >= CMD_BUFFER_SIZE)
+		  {
+			  while (rx_buffer[current_active] != '\r' && rx_buffer[current_active] != '\n')
+			  {
+				  new_active = (2*RX_BUFF_SIZE - hdma_usart1_rx.Instance->CNDTR-1)%RX_BUFF_SIZE;
+				  if (current_active != new_active)
+				  {
+					  current_active = (current_active + 1)%RX_BUFF_SIZE;
+				  }
+			  }
+			  if (rx_buffer[current_active] == '\r' || rx_buffer[current_active] == '\n')
+			  {
+				  command_buffer_overflow();
+				  command_buffer_pos = 0;
+			  }
+		  }
+
 	  }
+
+
+
+
+
+
+
+
+
+
+
 //	  HAL_Delay(1);
 ////	  if (HAL_GPIO_ReadPin(BTN_GPIO_Port, BTN_Pin))
 ////	  {
@@ -501,23 +533,66 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
   UNUSED(htim);
   if (htim == &htim2)
 	{
-	  count ++;
-	  if (count >= 8)
+	  stepper_x_count += stepper_x_direction;
+	  stepper_x_count %= STEPPER_X_MAX;
+	  if (limit_flag)
 	  {
 		  HAL_TIM_PWM_Stop_IT(htim, TIM_CHANNEL_1);
+		  zeroed = 0;
+		  return;
+	  }
+	  if (stepper_x_count == stepper_x_goal)
+	  {
+		  HAL_TIM_PWM_Stop_IT(htim, TIM_CHANNEL_1);
+		  return;
 	  }
 	}
   else if (htim == &htim3)
 	{
-	  count3 ++;
-	  if (count3 >= 12)
+	  stepper_y_count += stepper_y_direction;
+	  if (limit_flag)
 	  {
 		  HAL_TIM_PWM_Stop_IT(htim, TIM_CHANNEL_1);
+		  zeroed = 0;
+		  return;
+	  }
+	  if (stepper_y_count == stepper_y_goal)
+	  {
+		  HAL_TIM_PWM_Stop_IT(htim, TIM_CHANNEL_1);
+		  return;
 	  }
 	}
 
 }
 
+void command_buffer_overflow()
+{
+	tmp = 2;
+	send_message("Overflow",8);
+}
+
+void process_command()
+{
+	tmp = 5;
+	send_message("Processing",10);
+}
+
+void move_servos(int16_t xrel, int16_t yrel)
+{
+	//calculate based on speed for both x and y
+	int16_t xnew, ynew;
+	xnew = stepper_x_count;
+}
+
+void send_message(uint8_t* msg, int len)
+{
+	if (!msg) return;
+	while (hdma_usart1_tx.State != HAL_DMA_STATE_READY)
+	{}
+	HAL_UART_AbortTransmit(&huart1);
+	HAL_UART_Transmit_DMA(&huart1, msg, len);
+
+}
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
