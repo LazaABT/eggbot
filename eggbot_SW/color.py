@@ -7,18 +7,20 @@ import numpy as np
 import pickle
 
 # Pen colors
-#penColors = [[255, 255, 255], [213, 192, 101], [79, 150, 180], 
-# [151, 160, 159], [172, 129, 78], [69, 137, 96], [171, 62, 68],
-# [131, 76, 81], [47, 70, 150], [71, 71, 73]]
+#penColors = [[255, 255, 255], [213, 192, 101], [79, 150, 180], [151, 160, 159], [172, 129, 78], [69, 137, 96], [171, 62, 68], [131, 76, 81], [47, 70, 150], [71, 71, 73]]
+#colorNames = ['white', 'yellow', 'cyan', 'gray', 'orange', 'green', 'red', 'brown', 'blue', 'black']
 
 
-
-def loadColors(file):
+def loadFile(file):
     #Loads pen colors from pickle file
     with open(file, "rb") as f:
-        penColors = pickle.load(f)
-    return penColors
+        obj = pickle.load(f)
+    return obj
 
+def saveFile(file, obj):
+    with open(file, "wb") as f:
+        pickle.dump(obj, f)
+    print("Wrote to file", file)
 
 def sqDist(a, b):
     # 3d euclidean distance squared
