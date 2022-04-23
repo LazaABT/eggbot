@@ -62,10 +62,14 @@ void Error_Handler(void);
 #define BTN_Pin GPIO_PIN_0
 #define BTN_GPIO_Port GPIOA
 #define BTN_EXTI_IRQn EXTI0_IRQn
+#define YDIR_Pin GPIO_PIN_7
+#define YDIR_GPIO_Port GPIOA
 #define LD1_Pin GPIO_PIN_8
 #define LD1_GPIO_Port GPIOC
 #define LD2_Pin GPIO_PIN_9
 #define LD2_GPIO_Port GPIOC
+#define XDIR_Pin GPIO_PIN_10
+#define XDIR_GPIO_Port GPIOC
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */

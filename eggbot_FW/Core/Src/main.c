@@ -21,6 +21,7 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "math.h"
 
 /* USER CODE END Includes */
 
@@ -36,14 +37,16 @@
 #define TX_BUFF_SIZE (16)
 #define CMD_BUFFER_SIZE (16)
 #define STEPPER_X_MAX (200*16)
-#define STEPPER_Y_MAX (100*16)
-#define SERVO_UP_POSITION (3000)
-#define SERVO_DOWN_POSITION (6000)
+#define STEPPER_Y_MAX (850)
+#define SERVO_UP_POSITION (4600)
+#define SERVO_DOWN_POSITION (5300)
+#define STEPS_FROM_ZERO (20)
+#define STEPPER_PULSE_WIDTH (0.000002)
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
+#define min(a,b) a>b?b:a
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
@@ -68,10 +71,14 @@ static void MX_TIM2_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM4_Init(void);
 /* USER CODE BEGIN PFP */
-void move_servos(int16_t xrel, int16_t yrel);
+void set_speed(uint16_t x_speed, uint16_t y_speed);
+void move_steppers(int16_t xrel, int16_t yrel);
+void zero_steppers();
 void send_message(uint8_t* msg, int len);
-void process_command();
+int process_command();
 void command_buffer_overflow();
+void report_position();
+void report_max_position();
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -82,9 +89,10 @@ uint8_t command_buffer[CMD_BUFFER_SIZE], command_buffer_pos = 0;
 uint8_t rx_buffer[RX_BUFF_SIZE];
 uint8_t tx_buffer[TX_BUFF_SIZE];
 
-int16_t stepper_x_count = 0, stepper_x_goal = 0, stepper_x_direction = 1, stepper_x_speed = 0;
-int16_t stepper_y_count = 0, stepper_y_goal = 0, stepper_y_direction = 1, stepper_y_speed = 0;
-uint8_t zeroed = 0, limit_flag = 0;
+int16_t stepper_x_count = 0, stepper_x_goal = 0, stepper_x_direction = 1, stepper_x_speed = 100;
+int16_t stepper_y_count = 0, stepper_y_goal = 0, stepper_y_direction = 1, stepper_y_speed = 100;
+uint8_t stepper_x_moving = 0, stepper_y_moving = 0;
+uint8_t zeroed = 0, limit_flag = 0, ignore_limit = 0, zeroing = 0;
 
 volatile int tmp = 0;
 
@@ -133,9 +141,10 @@ int main(void)
 //  volatile HAL_StatusTypeDef tmp = HAL_TIM_Base_Start(&htim2);
 
 
-  htim4.Instance->CCR1 = (int)(SERVO_UP_POSITION)-1;
+  htim4.Instance->CCR1 = (int)(SERVO_UP_POSITION);
   HAL_TIM_PWM_Start_IT(&htim4, TIM_CHANNEL_1);
   HAL_UART_Receive_DMA(&huart1, rx_buffer, RX_BUFF_SIZE);
+  limit_flag = 0;
 
   int current_active = RX_BUFF_SIZE-1, new_active = RX_BUFF_SIZE-1;
   while (1)
@@ -144,44 +153,14 @@ int main(void)
 	  while (current_active != new_active)
 	  {
 		  current_active = (current_active + 1)%RX_BUFF_SIZE;
-		  if (rx_buffer[current_active] == '\r' || rx_buffer[current_active] == '\n')
-		  {
-			  if (command_buffer_pos > 0)
-			  {
-				  process_command();
-			  }
-			  command_buffer_pos = 0;
-			  continue;
-		  }
 		  command_buffer[command_buffer_pos]=rx_buffer[current_active];
 		  command_buffer_pos += 1;
-		  if (command_buffer_pos >= CMD_BUFFER_SIZE)
+		  if (process_command())
 		  {
-			  while (rx_buffer[current_active] != '\r' && rx_buffer[current_active] != '\n')
-			  {
-				  new_active = (2*RX_BUFF_SIZE - hdma_usart1_rx.Instance->CNDTR-1)%RX_BUFF_SIZE;
-				  if (current_active != new_active)
-				  {
-					  current_active = (current_active + 1)%RX_BUFF_SIZE;
-				  }
-			  }
-			  if (rx_buffer[current_active] == '\r' || rx_buffer[current_active] == '\n')
-			  {
-				  command_buffer_overflow();
-				  command_buffer_pos = 0;
-			  }
+			  command_buffer_pos = 0;
 		  }
 
 	  }
-
-
-
-
-
-
-
-
-
 
 
 //	  HAL_Delay(1);
@@ -294,7 +273,7 @@ static void MX_TIM2_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 29999;
+  sConfigOC.Pulse = 47;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim2, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
@@ -353,7 +332,7 @@ static void MX_TIM3_Init(void)
     Error_Handler();
   }
   sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 2999;
+  sConfigOC.Pulse = 47;
   sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
   sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
   if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
@@ -490,14 +469,20 @@ static void MX_GPIO_Init(void)
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOD_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
-  __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_7, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(YDIR_GPIO_Port, YDIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, LD1_Pin|LD2_Pin|GPIO_PIN_10, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_0, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, LD1_Pin|LD2_Pin|XDIR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : BTN_Pin */
   GPIO_InitStruct.Pin = BTN_Pin;
@@ -505,15 +490,22 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(BTN_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : PA7 */
-  GPIO_InitStruct.Pin = GPIO_PIN_7;
+  /*Configure GPIO pin : YDIR_Pin */
+  GPIO_InitStruct.Pin = YDIR_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+  HAL_GPIO_Init(YDIR_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LD1_Pin LD2_Pin PC10 */
-  GPIO_InitStruct.Pin = LD1_Pin|LD2_Pin|GPIO_PIN_10;
+  /*Configure GPIO pins : PB0 PB1 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LD1_Pin LD2_Pin XDIR_Pin */
+  GPIO_InitStruct.Pin = LD1_Pin|LD2_Pin|XDIR_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -535,53 +527,285 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
 	{
 	  stepper_x_count += stepper_x_direction;
 	  stepper_x_count %= STEPPER_X_MAX;
-	  if (limit_flag)
+	  if (limit_flag && (!ignore_limit) && zeroing)
 	  {
 		  HAL_TIM_PWM_Stop_IT(htim, TIM_CHANNEL_1);
-		  zeroed = 0;
+		  stepper_x_moving = 0;
 		  return;
 	  }
 	  if (stepper_x_count == stepper_x_goal)
 	  {
 		  HAL_TIM_PWM_Stop_IT(htim, TIM_CHANNEL_1);
+		  stepper_x_moving = 0;
 		  return;
 	  }
 	}
   else if (htim == &htim3)
 	{
 	  stepper_y_count += stepper_y_direction;
-	  if (limit_flag)
+	  if (limit_flag && (!ignore_limit) && zeroing)
 	  {
 		  HAL_TIM_PWM_Stop_IT(htim, TIM_CHANNEL_1);
-		  zeroed = 0;
+		  stepper_y_moving = 0;
 		  return;
 	  }
 	  if (stepper_y_count == stepper_y_goal)
 	  {
 		  HAL_TIM_PWM_Stop_IT(htim, TIM_CHANNEL_1);
+		  stepper_y_moving = 0;
 		  return;
 	  }
 	}
 
 }
 
+void set_speed(uint16_t x_speed, uint16_t y_speed)
+{
+	if (x_speed<1 || y_speed<1 || x_speed > 30000 || y_speed > 30000)
+	{
+		send_message("as\xff\xff",5);
+		return;
+	}
+	stepper_x_speed = x_speed;
+	stepper_y_speed = y_speed;
+	tx_buffer[0] = 'a';
+	tx_buffer[1] = 's';
+	*(uint16_t*)(tx_buffer+2) = x_speed;
+	*(uint16_t*)(tx_buffer+4) = y_speed;
+	send_message(tx_buffer,6);
+}
+
+void report_position()
+{
+	tx_buffer[0] = 'a';
+	tx_buffer[1] = 'r';
+	tx_buffer[2] = 'a';
+	*(uint16_t*)(tx_buffer+3) = stepper_x_count;
+	*(uint16_t*)(tx_buffer+5) = stepper_y_count;
+	send_message(tx_buffer,7);
+}
+
+void report_max_position()
+{
+	tx_buffer[0] = 'a';
+	tx_buffer[1] = 'r';
+	tx_buffer[2] = 'm';
+	*(uint16_t*)(tx_buffer+3) = STEPPER_X_MAX;
+	*(uint16_t*)(tx_buffer+5) = STEPPER_Y_MAX;
+	send_message(tx_buffer,7);
+}
+
 void command_buffer_overflow()
 {
-	tmp = 2;
-	send_message("Overflow",8);
+	send_message("O",1);
+	//Overflow message
 }
 
-void process_command()
+
+int process_command()
 {
-	tmp = 5;
-	send_message("Processing",10);
+	switch (command_buffer[0])
+	{
+	case 's':
+		if (command_buffer_pos < 5)
+		{
+//			send_message("ai",2);
+			return 0;
+		}
+		uint16_t speed_x, speed_y;
+		speed_x =*(uint16_t*)(command_buffer+1);
+		speed_y =*(uint16_t*)(command_buffer+3);
+		set_speed(speed_x,speed_y);
+
+	//set movement speed (sXXYY\r) -> (asXXYY) report exact movement speed (asFF in case of error)
+		break;
+	case 'm':
+		if (command_buffer_pos < 5)
+		{
+//			send_message("ai",2);
+			return 0;
+		}
+		int16_t rel_x, rel_y;
+		rel_x =*(int16_t*)(command_buffer+1);
+		rel_y =*(int16_t*)(command_buffer+3);
+		move_steppers(rel_x,rel_y);
+	//move relative  (mXXYY\r) -> (am) ack after done (amFFFF in case of error)
+		break;
+	case 'r':
+		if (command_buffer_pos < 2)
+		{
+//			send_message("ai",2);
+			return 0;
+		}
+		if (command_buffer[1] == 'a')
+		{
+			report_position();
+		}
+		else if (command_buffer[1] == 'm')
+		{
+			report_max_position();
+		}
+		else
+		{
+			send_message("ai",2);
+			return;
+		}
+	//report absolute position (ra\r) -> (araXXYY)  FFFF in case of error
+	//report max position (rm\r) -> (armXXYY)
+		break;
+	case 'z':
+		if (command_buffer_pos < 1)
+		{
+//			send_message("ai",2);
+			return 0;
+		}
+		zero_steppers();
+	//zero out (z\r) -> (az)
+		break;
+	case 'p':
+		if (command_buffer_pos < 2)
+		{
+//			send_message("ai",2);
+			return 0;
+		}
+		if (command_buffer[1] == 'u')
+		{
+			htim4.Instance->CCR1 = (int)(SERVO_UP_POSITION);
+			send_message("apu",3);
+		}
+		else if (command_buffer[1] == 'd')
+		{
+			while (htim4.Instance->CCR1 < (SERVO_DOWN_POSITION))
+			{
+				htim4.Instance->CCR1 = min(htim4.Instance->CCR1 + 30, SERVO_DOWN_POSITION);
+				HAL_Delay(20);
+			}
+			send_message("apd",3);
+		}
+		else
+		{
+			send_message("ai",2);
+		}
+	//lift pen (pu\r) -> (apu)
+	//drop pen (pd\r) -> (apu)
+		break;
+	default:
+		send_message("ai",2);
+		break;
+	}
+	return 1;
 }
 
-void move_servos(int16_t xrel, int16_t yrel)
+void zero_steppers()
+{
+	//calculate based on speed for both x and y
+	zeroing = 1;
+	limit_flag = 0;
+	stepper_y_goal = -1;
+	stepper_y_direction = 0;
+	HAL_GPIO_WritePin(YDIR_GPIO_Port, YDIR_Pin, GPIO_PIN_RESET);
+	htim3.Instance->ARR = 39999;
+	htim3.Instance->PSC = 1;
+	htim3.Instance->CCR1 = 47;
+	stepper_y_moving = 1;
+	ignore_limit = 0;
+	HAL_TIM_PWM_Start_IT(&htim3, TIM_CHANNEL_1);
+	while (stepper_y_moving) {}
+
+	HAL_GPIO_WritePin(YDIR_GPIO_Port, YDIR_Pin, GPIO_PIN_SET);
+	stepper_y_count = - STEPS_FROM_ZERO;
+	stepper_y_goal = 0;
+	stepper_y_direction = 1;
+	stepper_y_moving = 1;
+	ignore_limit = 1;
+	HAL_TIM_PWM_Start_IT(&htim3, TIM_CHANNEL_1);
+	while (stepper_y_moving) {}
+	limit_flag = 0;
+	zeroed = 1;
+	ignore_limit = 0;
+	zeroing = 0;
+	send_message("az",2);
+}
+
+void move_steppers(int16_t xrel, int16_t yrel)
 {
 	//calculate based on speed for both x and y
 	int16_t xnew, ynew;
-	xnew = stepper_x_count;
+	double speed,time,prescale,count,xspeed,yspeed;
+	xnew = stepper_x_count + xrel;
+	ynew = stepper_y_count + yrel;
+	if (ynew >= STEPPER_Y_MAX || ynew < 0 || !zeroed)
+	{
+		send_message("am\xFF\xFF\xFF\xFF",6);
+		return;
+	}
+	if (xrel ==0 && yrel == 0 )
+	{
+		send_message("am\x00\x00\x00\x00",6);
+		return;
+	}
+	stepper_x_goal = (xnew + STEPPER_X_MAX) % STEPPER_X_MAX;
+	stepper_y_goal = ynew;
+	speed =  1.0*xrel*stepper_x_speed +  1.0*yrel*stepper_y_speed;
+	speed /=  1.0*(xrel + yrel);
+	time = sqrt(1.0*xrel*xrel + 1.0*yrel*yrel)/speed;
+	if (xrel != 0)
+	{
+		xspeed = abs(xrel)/time;
+		xspeed = 24e6/xspeed;
+		prescale = ceil(xspeed / 65500);
+		count = round(xspeed / prescale);
+		htim2.Instance->ARR = (uint16_t)count-1;
+		htim2.Instance->PSC = (uint16_t)prescale-1;
+	}
+
+	if (yrel != 0)
+	{
+		yspeed = abs(yrel)/time;
+		yspeed = 24e6/yspeed;
+		prescale = ceil(yspeed / 65500);
+		count = round(yspeed / prescale);
+		htim3.Instance->ARR = (uint16_t)count-1;
+		htim3.Instance->PSC = (uint16_t)prescale-1;
+	}
+	if (xrel > 0)
+	{
+		stepper_x_direction = 1;
+		HAL_GPIO_WritePin(XDIR_GPIO_Port, XDIR_Pin, GPIO_PIN_SET);
+	}
+	else
+	{
+		stepper_x_direction = -1;
+		HAL_GPIO_WritePin(XDIR_GPIO_Port, XDIR_Pin, GPIO_PIN_RESET);
+	}
+
+	if (yrel > 0)
+	{
+		stepper_y_direction = 1;
+		HAL_GPIO_WritePin(YDIR_GPIO_Port, YDIR_Pin, GPIO_PIN_SET);
+	}
+	else
+	{
+		stepper_y_direction = -1;
+		HAL_GPIO_WritePin(YDIR_GPIO_Port, YDIR_Pin, GPIO_PIN_RESET);
+	}
+	if (xrel != 0)
+	{
+		stepper_x_moving = 1;
+		HAL_TIM_PWM_Start_IT(&htim2, TIM_CHANNEL_1);
+	}
+	if (yrel != 0)
+	{
+		stepper_y_moving = 1;
+		HAL_TIM_PWM_Start_IT(&htim3, TIM_CHANNEL_1);
+	}
+	while (stepper_x_moving || stepper_y_moving) {}
+
+	tx_buffer[0] = 'a';
+	tx_buffer[1] = 'm';
+	*(int16_t*)(tx_buffer+2) = xrel;
+	*(int16_t*)(tx_buffer+4) = yrel;
+	send_message(tx_buffer,6);
 }
 
 void send_message(uint8_t* msg, int len)
@@ -599,6 +823,7 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 	if (GPIO_Pin == LIMIT_PIN)
 	{
 		HAL_GPIO_TogglePin(LD2_GPIO_Port, LD2_Pin);
+		limit_flag = 1;
 	}
 }
 
