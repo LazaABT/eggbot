@@ -13,7 +13,7 @@ from color import convertImage
 
 #  ------ CONFIG ------
 imFolder = r"test_images/"
-imFile = r"lines.png"
+imFile = r"circles_wrap.png"
 
 outFolder = r"out_images/"
 outFile = r"shOut.png"
@@ -31,6 +31,7 @@ ERODE = True
 
 DIST_THRESH = 2
 MIN_CONTOUR_LENGTH = 50
+MAX_LINE_LEN = 1000
 
 #  ------ /CONFIG ------
 
@@ -43,6 +44,7 @@ def maxDist(p1, p2, points):
     return np.max(distFromLine(p1, p2, points))
 
 def lineifyContour(x, y):
+    global MAX_LINE_LEN
     # Returns array of points
     
     # If contour too short returns none
@@ -64,7 +66,16 @@ def lineifyContour(x, y):
         else:
             # Move on to next line
             # Make last between point new line endpoint
-            lines = np.concatenate((lines, [points[-1]]))
+            lineslast = lines[-1]
+            xd = points[-1][0] - lineslast[0]
+            yd = points[-1][1] - lineslast[1]
+            dist = np.sqrt(xd**2+yd**2)
+            segs = int(np.ceil(dist/MAX_LINE_LEN))
+            if(dist > 3100): segs = 1
+            for seg in range(segs):
+                newx = lineslast[0] + (xd * (seg+1))/segs
+                newy = lineslast[1] + (yd * (seg+1))/segs
+                lines = np.concatenate((lines, [[newx, newy]]))
             p1 = points[-1].copy()  #New line start is p2
             points = np.array([p2])
     # Add last point to lines
@@ -82,8 +93,8 @@ def filterContours(contours):
         x = cnt[:, 0, 0]
         y = cnt[:, 0, 1]
 
-        x = np.concatenate((x, [x[0]]))
-        y = np.concatenate((y, [y[0]]))
+        # x = np.concatenate((x, [x[0]]))
+        # y = np.concatenate((y, [y[0]]))
                 
         #Extract longest lines
         lines = lineifyContour(x, y)
@@ -106,7 +117,7 @@ def plotConts(conts, colorsShown, penColors):
         if colorsShown[i]:
             for lines in cnts:
                 x, y = np.array(list(zip(*lines)))
-                a.plot(x, y, 'k')
+                a.plot(x, y, 'k*-')
                 #a.plot(x, y, color=np.array(penColors[i])/255)
     
     a.set_ylim([height, 0])
@@ -126,9 +137,45 @@ def showButtonClicked(e):
     global showIm
     showIm = not showIm
     plotConts(conts, colorsShown, penColors)
+    
+def separateContours(contours, im):
+    new_cnts = []
+    for cnt in contours:
+        xs = np.array(cnt)[:,0,0]
+        xs = np.concatenate([xs, [xs[0]]])
+        ys = np.array(cnt)[:,0,1]
+        ys = np.concatenate([ys, [ys[0]]])
+        if np.sum(xs == im.shape[1]-1)+np.sum(xs == 0):
+            print("Cutting")
+            tmp_cnt = []
+            was_ok = 1
+            for i in range(len(xs)):
+                if xs[i] != im.shape[1]-1 and xs[i] != 0:
+                    tmp_cnt.append([[xs[i], ys[i]]])
+                    was_ok = 1
+                else:
+                    if was_ok:
+                        tmp_cnt.append([[xs[i], ys[i]]])
+                        new_cnts.append(tmp_cnt)
+                    tmp_cnt = [[[xs[i], ys[i]]]]
+                    was_ok = 0
+            if len(tmp_cnt) > 1:
+                new_cnts.append(tmp_cnt)
+        else:
+            new_cnts.append(cnt)
+    new_cnts = tuple(new_cnts)
+    return new_cnts
 
-
-
+def normalizeContours(contours, im):
+    new_cnts = []
+    for cnt in contours:
+        xs = np.array(cnt)[:,0,0]
+        ys = np.array(cnt)[:,0,1]
+        xs = xs - 1
+        xs[xs == -1] = im.shape[1]-3
+        xs[xs == im.shape[1]-2] = 0
+        new_cnts.append(np.array(list(zip(xs,ys)))[:,np.newaxis,:])
+    return new_cnts
 
 # Load colors
 (penColors, colorNames) = loadFile(colorFile)
@@ -147,7 +194,6 @@ except Exception:
     sys.exit()
 
 
-
 height, width, _ = im.shape
 
 # Generate image with colors from palette
@@ -162,10 +208,17 @@ if CONTOURS:
         mask = (minIndexes==colorIndex).astype(float)
         if ERODE: mask = cv2.erode(mask, np.ones((3, 3))/9)
         mask = mask.astype(np.uint8)
+        # Adding wrapped pixel row on each side
+        mask = np.concatenate((mask[:,-1,np.newaxis], mask, mask[:,0,np.newaxis]),1)
         
         # Find contours
         contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         
+        if colorIndex == len(penColors) - 1:
+            print("Add stuff here")
+        
+        contours = separateContours(contours, mask)
+        contours = normalizeContours(contours, mask)
         conts.append(filterContours(contours))
         
         # Draw contours on drawing

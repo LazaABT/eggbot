@@ -32,7 +32,8 @@ drop_delay = 0.1
 raise_delay = 0.2
 
 port = "COM7"
-infile = r"E:\bunny_cnts.pickle"
+infile = r"C:\Users\lakij\Documents\eggbot\eggbot_SW\contour_files\circles_wrap_cnts.pickle"
+
 
 
 ctrl = EggbotControl(port)
