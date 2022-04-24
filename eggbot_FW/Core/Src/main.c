@@ -38,7 +38,7 @@
 #define CMD_BUFFER_SIZE (16)
 #define STEPPER_X_MAX (200*16)
 #define STEPPER_Y_MAX (850)
-#define SERVO_UP_POSITION (4600)
+#define SERVO_UP_POSITION (4700)
 #define SERVO_DOWN_POSITION (5300)
 #define STEPS_FROM_ZERO (20)
 #define STEPPER_PULSE_WIDTH (0.000002)
@@ -525,7 +525,7 @@ void HAL_TIM_PWM_PulseFinishedCallback(TIM_HandleTypeDef *htim)
   UNUSED(htim);
   if (htim == &htim2)
 	{
-	  stepper_x_count += stepper_x_direction;
+	  stepper_x_count += stepper_x_direction + STEPPER_X_MAX;
 	  stepper_x_count %= STEPPER_X_MAX;
 	  if (limit_flag && (!ignore_limit) && zeroing)
 	  {
@@ -670,7 +670,11 @@ int process_command()
 		}
 		if (command_buffer[1] == 'u')
 		{
-			htim4.Instance->CCR1 = (int)(SERVO_UP_POSITION);
+			while (htim4.Instance->CCR1 < (SERVO_UP_POSITION))
+			{
+				htim4.Instance->CCR1 = min(htim4.Instance->CCR1 + 30, SERVO_UP_POSITION);
+				HAL_Delay(15);
+			}
 			send_message("apu",3);
 		}
 		else if (command_buffer[1] == 'd')
@@ -678,7 +682,7 @@ int process_command()
 			while (htim4.Instance->CCR1 < (SERVO_DOWN_POSITION))
 			{
 				htim4.Instance->CCR1 = min(htim4.Instance->CCR1 + 30, SERVO_DOWN_POSITION);
-				HAL_Delay(20);
+				HAL_Delay(15);
 			}
 			send_message("apd",3);
 		}
@@ -705,7 +709,7 @@ void zero_steppers()
 	stepper_y_direction = 0;
 	HAL_GPIO_WritePin(YDIR_GPIO_Port, YDIR_Pin, GPIO_PIN_RESET);
 	htim3.Instance->ARR = 39999;
-	htim3.Instance->PSC = 1;
+	htim3.Instance->PSC = 3;
 	htim3.Instance->CCR1 = 47;
 	stepper_y_moving = 1;
 	ignore_limit = 0;
@@ -746,8 +750,8 @@ void move_steppers(int16_t xrel, int16_t yrel)
 	}
 	stepper_x_goal = (xnew + STEPPER_X_MAX) % STEPPER_X_MAX;
 	stepper_y_goal = ynew;
-	speed =  1.0*xrel*stepper_x_speed +  1.0*yrel*stepper_y_speed;
-	speed /=  1.0*(xrel + yrel);
+	speed =  1.0*abs(xrel)*stepper_x_speed +  1.0*abs(yrel)*stepper_y_speed;
+	speed /=  1.0*(abs(xrel) + abs(yrel));
 	time = sqrt(1.0*xrel*xrel + 1.0*yrel*yrel)/speed;
 	if (xrel != 0)
 	{
