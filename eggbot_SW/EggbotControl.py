@@ -68,7 +68,7 @@ class EggbotControl:
         y_rel = int(y_rel)
         self.ser.write(struct.pack("h",int(x_rel)))
         self.ser.write(struct.pack("h",int(y_rel)))
-        self.ser.timeout = 60
+        self.ser.timeout = 10
         resp = self.ser.read(1)
         if resp != b'a':
             raise Exception("Unexpected response",resp)
@@ -77,7 +77,7 @@ class EggbotControl:
         if resp != b'm':
             raise Exception("Unexpected response",resp)
         resp = self.ser.read(4)
-        if resp == b'\xFF\xFF\xFF\xFF':
+        if resp == b'\xFF\xFF\xFF\xFF' and x_rel != -1 and y_rel != -1:
             raise Exception("Error issuing move command")
             
     def get_position(self):
