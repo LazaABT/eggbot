@@ -1,1 +1,6 @@
 eggbot_FW/Debug/
+eggbot_SW/eggbot_venv
+eggbot_SW/test_images
+eggbot_SW/out_images
+eggbot_SW/contour_files
+eggbot_SW/__pycache__
