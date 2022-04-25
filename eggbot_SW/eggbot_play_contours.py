@@ -25,14 +25,14 @@ def find_max_min(data, color_order):
 
 maxx = 3600
 maxy = 850
-color_order = ['yellow', 'cyan', 'gray', 'orange', 'green', 'red', 'brown', 'blue', 'black']
+# color_order = ['yellow', 'cyan', 'gray', 'orange', 'green', 'red', 'brown', 'blue', 'black']
 move_speed = 1000
-draw_speed = 600
+draw_speed = 400
 drop_delay = 0.1
 raise_delay = 0.2
 
 port = "COM7"
-infile = r"C:\Users\lakij\Documents\eggbot\eggbot_SW\contour_files\circles_wrap_cnts.pickle"
+infile = r"C:\Users\lakij\Documents\eggbot\eggbot_SW\contour_files\novel_logo_cnts.pickle"
 
 
 
@@ -47,7 +47,9 @@ maxx, maxy = ctrl.get_max_position()
 stepperx = 0
 steppery = 0
     
-for color in color_order:
+for color in data.keys():
+    if color == "white":
+        continue
     ctrl.lift_servo()
     num_cnt = len(data[color])
     if num_cnt == 0:
@@ -84,8 +86,11 @@ for color in color_order:
             first_point = 0
         ctrl.lift_servo()
         time.sleep(raise_delay)
-    
-    print("Done drawing")
+        
+    stepperx, steppery = ctrl.get_position()
+    ctrl.set_speed(move_speed, move_speed)
+    ctrl.move(0, maxy // 2 - steppery)
+    print("Done drawing, remove marker")
         
         
     

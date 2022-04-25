@@ -12,8 +12,8 @@ from color import saveFile
 from color import convertImage
 
 #  ------ CONFIG ------
-imFolder = r"test_images/"
-imFile = r"circles_wrap.png"
+imFolder = r"C:\Users\lakij\Documents\eggbot\eggbot_SW\test_images\\"
+imFile = r"novel_logo.png"
 
 outFolder = r"out_images/"
 outFile = r"shOut.png"
@@ -24,14 +24,17 @@ contFile = "_cnts.pickle"
 #colorFile = "colorref.pickle"
 colorFile = "colorsNamed.pickle"
 
-
+USE_COLORS = ['white', 'red', 'black', 'cyan'] #['white', 'yellow', 'cyan', 'gray', 'orange', 'green', 'red', 'brown', 'blue', 'black']
 SAVE_IMAGE = False
 CONTOURS = True
 ERODE = True
+DO_FILL = True #EXPERIMENTAL
 
-DIST_THRESH = 2
+DIST_THRESH = 7
 MIN_CONTOUR_LENGTH = 50
 MAX_LINE_LEN = 1000
+ERODE_KERNEL_SIZE = (5, 7)
+ERODE_KERNEL_SIZE_FILL = (15, 23)
 
 #  ------ /CONFIG ------
 
@@ -129,7 +132,10 @@ def dumpButtonClicked(e):
     # Dump contours into file
     d = {}
     for i, cnts in enumerate(conts):
-        d[colorNames[i]] = cnts
+        if colorsShown[i]:
+            d[colorNames[i]] = cnts
+        else:
+            d[colorNames[i]] = []
     # Assumes imFile has 3 letter extension (.jpg, .png)
     saveFile(contFolder+imFile[:-4]+contFile, d)
 
@@ -141,6 +147,7 @@ def showButtonClicked(e):
 def separateContours(contours, im):
     new_cnts = []
     for cnt in contours:
+        cnt = np.concatenate([cnt, cnt[0,0,np.newaxis,np.newaxis,:]],0)
         xs = np.array(cnt)[:,0,0]
         xs = np.concatenate([xs, [xs[0]]])
         ys = np.array(cnt)[:,0,1]
@@ -181,6 +188,17 @@ def normalizeContours(contours, im):
 (penColors, colorNames) = loadFile(colorFile)
 colorsShown = [False]*len(penColors)
 
+if USE_COLORS:
+    pc = penColors
+    cn = colorNames
+    penColors = []
+    colorNames = []
+    for p,n in zip(pc, cn):
+        print(p,n)
+        if n in USE_COLORS:
+            penColors.append(p)
+            colorNames.append(n)
+
 # UI Variables
 showIm = False
 
@@ -206,28 +224,38 @@ if CONTOURS:
     for colorIndex in range(len(penColors)):
         # Generate mask from conversion results for one color
         mask = (minIndexes==colorIndex).astype(float)
-        if ERODE: mask = cv2.erode(mask, np.ones((3, 3))/9)
-        mask = mask.astype(np.uint8)
-        # Adding wrapped pixel row on each side
-        mask = np.concatenate((mask[:,-1,np.newaxis], mask, mask[:,0,np.newaxis]),1)
+        if ERODE: mask = cv2.erode(mask, np.ones(ERODE_KERNEL_SIZE))
         
-        # Find contours
-        contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        
-        if colorIndex == len(penColors) - 1:
-            print("Add stuff here")
-        
-        contours = separateContours(contours, mask)
-        contours = normalizeContours(contours, mask)
-        conts.append(filterContours(contours))
-        
+        surface_left = np.sum(mask.astype(float))
+        color_conts = []
+        while surface_left:
+            mask = mask.astype(np.uint8)
+            # Adding wrapped pixel row on each side
+            mask = np.concatenate((mask[:,-1,np.newaxis], mask, mask[:,0,np.newaxis]),1)
+            
+            # Find contours
+            contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if colorIndex == len(penColors) - 1:
+                print("Add stuff here")
+            
+            contours = separateContours(contours, mask)
+            contours = normalizeContours(contours, mask)
+            color_conts.extend(filterContours(contours))
+            
+            # for i in range(len(contours)):
+            #     color = list(map(int, np.random.rand(3,)*255))
+            #     cv2.drawContours(drawing, contours, i, color, 1, cv2.LINE_8, hierarchy, 0)
+            if DO_FILL:
+                mask = cv2.erode(mask, np.ones(ERODE_KERNEL_SIZE_FILL))
+                surface_left = np.sum(mask.astype(float))
+            else:
+                surface_left = 0
+                
         # Draw contours on drawing
+        conts.append(color_conts)
         drawing.append(np.ones((im.shape[0], im.shape[1], 3), dtype=np.uint8)*255)  
         cv2.drawContours(drawing[colorIndex], contours, -1, penColors[colorIndex], 1, cv2.LINE_8)
-        # for i in range(len(contours)):
-        #     color = list(map(int, np.random.rand(3,)*255))
-        #     cv2.drawContours(drawing, contours, i, color, 1, cv2.LINE_8, hierarchy, 0)
-        
 
 
 # Drawing
